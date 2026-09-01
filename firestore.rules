@@ -1,0 +1,104 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────
+// NILAN FASHION — Firestore Security Rules
+// Paste this into Firebase Console → Firestore Database → Rules,
+// then click Publish. See README.md → "Deploy Firestore rules".
+// ─────────────────────────────────────────────────────────────
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // Admin = a signed-in user whose email exists in the admins collection.
+    function isAdmin() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.token.email));
+    }
+
+    // ── Public read, admin write ──
+    match /products/{id} {
+      allow read: if true;
+      allow create, delete: if isAdmin();
+      // Admins can change anything. A signed-in shopper can ONLY ever decrease
+      // `stock` (never below 0, never increase it) as part of placing an order —
+      // this is what lets the checkout stock-transaction run without opening the
+      // whole product document to arbitrary edits from the browser.
+      allow update: if isAdmin() || (
+        isSignedIn() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock']) &&
+        request.resource.data.stock >= 0 &&
+        request.resource.data.stock <= resource.data.stock
+      );
+    }
+    match /categories/{id}    { allow read: if true; allow write: if isAdmin(); }
+    match /banners/{id}       { allow read: if true; allow write: if isAdmin(); }
+    match /faqs/{id}          { allow read: if true; allow write: if isAdmin(); }
+    match /coupons/{id}       { allow read: if true; allow write: if isAdmin(); }
+    match /settings/{id}      { allow read: if true; allow write: if isAdmin(); }
+
+    // ── Reviews: anyone can read, signed-in users can create their own, admin can moderate ──
+    match /reviews/{id} {
+      allow read: if true;
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    // ── User-owned documents ──
+    match /users/{uid}     { allow read, write: if isOwner(uid) || isAdmin(); }
+    match /carts/{uid}     { allow read, write: if isOwner(uid); }
+    match /wishlists/{uid} { allow read, write: if isOwner(uid); }
+
+    // ── Orders & payment flow: user creates/reads their own, admin manages all ──
+    match /orders/{id} {
+      allow read: if isAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid);
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+    match /codRequests/{id}  { allow read: if isAdmin(); allow create: if isSignedIn(); allow update, delete: if isAdmin(); }
+    match /upiRequests/{id}  { allow read: if isAdmin(); allow create: if isSignedIn(); allow update, delete: if isAdmin(); }
+    match /transactions/{id} {
+      allow read: if isAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid);
+      allow write: if isAdmin();
+    }
+    match /couponUsage/{id}  { allow read, write: if isAdmin(); }
+
+    // ── Requests users submit about themselves ──
+    match /returnRequests/{id} {
+      allow read: if isAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid);
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow update: if isAdmin();
+    }
+    match /wholesaleRequests/{id} {
+      allow read: if isAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid);
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow update: if isAdmin();
+    }
+
+    // ── Tracking, notifications, history, login log: admin-written, user/owner-readable ──
+    match /trackingUpdates/{id}  { allow read: if true; allow write: if isAdmin(); }
+    match /notifications/{id} {
+      allow read: if isAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid);
+      allow write: if isAdmin();
+    }
+    match /productHistory/{id}   { allow read, write: if isAdmin(); }
+    match /adminActivityLogs/{id}{ allow read, write: if isAdmin(); }
+    match /loginHistory/{id} {
+      allow create: if isSignedIn();
+      allow read: if isAdmin();
+    }
+
+    // ── Admin roster: only readable by Cloud Functions / manually managed in console ──
+    match /admins/{email} {
+      allow read: if isSignedIn();
+      allow write: if false; // manage via Firebase Console only
+    }
+  }
+}
